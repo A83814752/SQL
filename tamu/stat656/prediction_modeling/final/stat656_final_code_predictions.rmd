@@ -1,0 +1,454 @@
+--
+title: "Final Part 1, Predictions"
+output:
+  pdf_document: default
+documentclass: article
+classoption: a4paper
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(cache = TRUE)
+```
+
+```{r functions: load packages,echo=F,cache=T}
+#load packages
+load_pkgs <- function(pkg_list) {
+  for (pkg in pkg_list) {
+    if(!require(pkg,quiet=T,character.only=T))install.packages(pkg);require(pkg,character.only=T)
+  }
+}
+```
+
+```{r actions: load packages,echo=F,cache=T}
+yourName = 'michaelHinshaw'#fill in your name, no spaces, leave quotes
+
+options(max.print=1000000)
+
+pkg_list = c(
+  'AppliedPredictiveModeling',
+  'car',
+  'caret',
+  'corrplot',
+  'dplyr',
+  'earth',
+  'e1071',
+  'fastDummies',
+  'ggplot2',
+  'glmnet',
+  'knitr',
+  'lattice',
+  'missForest',
+  'neuralnet',
+  'pROC',
+  'RANN',
+  'reshape2',
+  'readr',
+  'tidyverse',
+  'vip'
+  )
+
+load_pkgs(pkg_list)
+```
+
+```{r actions: set file path, load data, transform data, echo=F, cache=T}
+#set file path
+if ( Sys.info()['sysname'] == 'Windows' ) {
+  file_path='A:\\downloads\\stat656_final\\'
+} else {
+  file_path='/home/share/stat656_final/'
+}
+
+#load data
+load(paste(file_path,'stat656_final_data_x_train.rdata',sep=''))
+load(paste(file_path,'stat656_final_data_y_train.rdata',sep=''))
+load(paste(file_path,'stat656_final_data_x_validate.rdata',sep=''))
+load(paste(file_path,'stat656_final_data_y_validate.rdata',sep=''))
+load(paste(file_path,'stat656_final_data_x_test.rdata',sep=''))
+
+#rename datasets for convenience
+x_trn = Xtrain
+y_trn = Ytrain
+x_val = Xvalidate
+y_val = Yvalidate
+x_tst = Xtest
+
+#remove col v8, all missing values
+x_trn = dplyr::select(x_trn, -V8)
+x_val = select(x_val, -V8)
+x_tst = select(x_tst, -V8)
+
+#replace y factor values
+y_trn = replace(y_trn, y_trn == 'fraud', 1)
+y_trn = replace(y_trn, y_trn == 'not fraud', 0)
+y_val = replace(y_val, y_val == 'fraud', 1)
+y_val = replace(y_val, y_val == 'not fraud', 0)
+y_trn = factor(y_trn)
+y_val = factor(y_val)
+
+# We want to code results so that the outcome of interest is the event. Looking at the prediction output, this data is being used for identifying cases of fraud, so 'Fraud' is the outcome of interest.
+y_trn = relevel(y_trn, ref = 1)
+y_val = relevel(y_val, ref = 1)
+
+#join x and y data
+df_trn = cbind.data.frame(x_trn,y_trn)
+df_val = cbind.data.frame(x_val,y_val)
+names(df_trn)[ncol(x_trn) + 1] = "Y"
+names(df_val)[ncol(x_val) + 1] = "Y"
+df_tst = x_tst
+
+#set seed
+set.seed(1)
+```
+
+```{r functions: examine datasets, cache = TRUE}
+examine_dataset <- function(dataset) {
+  #gives summary information about a given dataset
+  cat("\n--------",deparse(substitute(dataset)),"dataset information--------\n")
+  cat(" \nDataset structure:\n")
+  str(dataset, list.len=ncol(dataset))
+  dataset
+  if (is.data.frame(dataset)) {
+    cat("\nData frame rows:", nrow(dataset),"\n")
+    cat("\nData frame columns:", ncol(dataset),"\n")
+    cat("\nFeature classes:")
+    print(table(sapply(dataset, class)))
+    cat("\nData types:")
+    print(table(sapply(dataset, typeof)))
+    cat("\nFactors:",names(which(sapply(dataset,is.factor))),"\n")
+    cat("\nCheck for NA values:\n")
+    print(table(sapply(dataset,is.na)))
+    miss_1 = sapply(dataset, function(y) sum(length(which(is.na(y)))))
+    miss_2 = sapply(dataset, function(y) sum(length(which(is.na(y)))))/nrow(dataset)
+    cat("\nTable of missing by column:\n")
+    print(table(miss_1))
+    cat("\nMax percent missing in a column:",max(miss_2),"\n")
+    cat("\nCount of missing by column:\n")
+    print(miss_1)
+    cat("\nPercent missing by column:\n")
+    print(miss_2)
+  } else {
+    cat("\nData type:",unique(sapply(dataset, typeof)),"\n")
+    cat("\nNA values:",sum(is.na(dataset)),"\n")
+    cat("\nNA %:",sum(is.na(dataset))/length(dataset),"\n")
+    cat("\nTable %:",table(dataset),"\n")
+  }
+
+}
+```
+
+```{r actions: examine datasets initial, cache = TRUE}
+sink(paste(file_path,'stat656_final_data_info.txt',sep=''), append=FALSE, split=FALSE)
+
+examine_dataset(x_trn)
+examine_dataset(y_trn)
+examine_dataset(x_val)
+examine_dataset(y_val)
+examine_dataset(x_tst)
+
+# check for multicollinearity
+# x_trn_miss2_cor = replace(cor(select(df_trn_miss$m2,-Y)), cor(select(df_trn_miss$m2,-Y)) == 1, 0)
+# x_val_miss2_cor = replace(cor(select(df_val_miss$m2,-Y)), cor(select(df_val_miss$m2,-Y)) == 1, 0)
+# x_tst_miss2_cor = replace(cor(df_tst_miss$m2), cor(df_tst_miss$m2) == 1, 0)
+# 
+# x_trn_miss3_cor = replace(cor(select(df_trn_miss$m3,-Y)), cor(select(df_trn_miss$m3,-Y)) == 1, 0)
+# x_val_miss3_cor = replace(cor(select(df_val_miss$m3,-Y)), cor(select(df_val_miss$m3,-Y)) == 1, 0)
+# x_tst_miss3_cor = replace(cor(df_tst_miss$m3), cor(df_tst_miss$m3) == 1, 0)
+# 
+# max(abs(x_trn_miss2_cor))
+# max(abs(x_val_miss2_cor))
+# max(abs(x_tst_miss2_cor))
+# max(abs(x_trn_miss3_cor))
+# max(abs(x_val_miss3_cor))
+# max(abs(x_tst_miss3_cor))
+
+sink()
+```
+
+```{r functions: missing data, cache = TRUE}
+modeImpute = function(Xqual){
+  tbl = table(Xqual)
+  Xqual[is.na(Xqual)] = names(tbl)[which.max(tbl)]
+  return(Xqual)
+}
+
+visualize_missing <- function(x){
+  x %>% 
+    is.na %>%
+    melt %>%
+    ggplot(data = .,
+           aes(x = Var2,
+               y = Var1)) +
+    geom_raster(aes(fill = value)) +
+    scale_fill_grey(name = "",
+                    labels = c("Present","Missing")) +
+    theme_minimal() + 
+    theme(axis.text.x  = element_text(angle=45, vjust=0.5)) + 
+    labs(x = "Variables in Dataset",
+         y = "Rows / observations")
+}
+
+handle_missing <- function(df,y_col=NULL) {
+  #takes full dataset and creates multiple datasets with different missing value techniques
+
+  #split data by class
+  if( !is.null(y_col) ) {
+    x = select(df,-y_col)
+    y = select(df,y_col)
+  } else {
+    x = df
+  }
+  
+  #separate numeric and factor features
+  x_num = data.frame(x[,sapply(x,is.numeric)])
+  x_fac = data.frame(x[,sapply(x,is.factor)])
+
+  #reset column names because they are lost if df has <2 cols
+  colnames(x_num) = names(which(sapply(select(df,-y_col),is.numeric)))
+  colnames(x_fac) = names(which(sapply(select(df,-y_col),is.factor)))
+  
+  
+  
+  #method 1: simple list-wise deletion, remove all obs with missing values
+  #using as a baseline
+  m1 = na.omit(df)
+  m1 = dummy_cols(m1,
+                  select_columns=names(x_fac),
+                  remove_first_dummy=T,
+                  remove_selected_columns=T)
+  
+  
+  
+  #method 2: knn w/ response (auto scales and centers)
+  x_num_imp = predict(preProcess(select(df,-colnames(x_fac)),method='knnImpute'),newdata=select(df,-colnames(x_fac)))
+  
+  if ( ncol(x_fac) == 1 ) {
+    x_fac_imp = modeImpute(x_fac)
+  } else {
+    x_fac_imp = x_fac
+    for (i in 1:ncol(x_fac))
+      x_fac_imp[,i] = modeImpute(x_fac[,i])
+  }
+  m2 = data.frame(cbind(x_num_imp,x_fac_imp))
+  m2 = dummy_cols(m2
+                 ,select_columns=names(x_fac)
+                 ,remove_first_dummy=T
+                 ,remove_selected_columns=T
+                 )
+  
+  
+  
+  #method 3: knn w/o response (auto scales and centers)
+  x_num_imp = predict(preProcess(select(x,-colnames(x_fac)),method='knnImpute'),newdata=select(x,-colnames(x_fac)))
+  
+  if ( ncol(x_fac) == 1 ) {
+    x_fac_imp = modeImpute(x_fac)
+  } else {
+    x_fac_imp = x_fac
+    for (i in 1:ncol(x_fac))
+      x_fac_imp[,i] = modeImpute(x_fac[,i])
+  }
+  if( !is.null(y_col) ) {
+    m3 = data.frame(cbind(x_num_imp,x_fac_imp,y))
+  } else {
+    m3 = data.frame(cbind(x_num_imp,x_fac_imp))
+  }
+  m3 = dummy_cols(m3
+                 ,select_columns=names(x_fac)
+                 ,remove_first_dummy=T
+                 ,remove_selected_columns=T
+                 )
+
+  list('m1' = m1
+      ,'m2' = m2
+      ,'m3' = m3
+      ,'y_col' = y_col
+      )
+}
+```
+
+```{r actions: handle missing data, reexamine, cache = TRUE}
+# datasets were too large to visualize without crashing Rstudio
+# visualize_missing(x_trn)
+# visualize_missing(x_val)
+# visualize_missing(x_tst)
+
+df_trn_miss = handle_missing(df_trn,"Y")
+df_val_miss = handle_missing(df_val,"Y")
+df_tst_miss = handle_missing(x_tst)
+
+sink(paste(file_path,'stat656_final_data_missing_info.txt',sep=''), append=FALSE, split=FALSE)
+
+  examine_dataset(df_trn_miss$m2)
+  examine_dataset(df_val_miss$m2)
+  examine_dataset(df_tst_miss$m2)
+  
+  examine_dataset(df_trn_miss$m3)
+  examine_dataset(df_val_miss$m3)
+  examine_dataset(df_tst_miss$m3)
+
+sink()
+```
+
+```{r model logistic elastic net tuning, echo=F, cache=T}
+model_len_tune <- function(dftrn,dfval){
+  xtrn = select(dftrn,-Y)
+  ytrn = y_trn
+  xval = select(dfval,-Y)
+  yval = y_val
+
+  tc = trainControl(method = "cv",
+                    number = 10)
+  tg = expand.grid('alpha'=seq(0.5, 1,
+                   length.out = 100),
+                   'lambda' = seq(0.0001, .5,
+                   length.out = 100))
+  tp_trn = train(xtrn,
+                 ytrn,
+                 method = "glmnet",
+                 trControl = tc,
+                 tuneGrid = tg)
+  tp_val = train(xval,
+                 yval,
+                 method = "glmnet",
+                 trControl = tc,
+                 tuneGrid = tg)
+  
+  write.csv(tp_trn, file=paste(file_path,'stat656_final_tuning_trn.csv',sep=''))
+  write.csv(tp_val, file=paste(file_path,'stat656_final_tuning_val.csv',sep=''))
+
+  list('trn_alpha'  = tp_trn$bestTune$alpha
+      ,'trn_lambda' = tp_trn$bestTune$lambda
+      ,'val_alpha'  = tp_val$bestTune$alpha
+      ,'val_lambda' = tp_val$bestTune$lambda
+      )
+}
+```
+
+```{r model logistic elastic net predictions, echo=F, cache=T}
+model_len_pred <- function(dftrn,
+                           dfval,
+                           dftst,
+                           trn_alpha,
+                           trn_lambda,
+                           val_alpha,
+                           val_lambda) {
+  
+  xtrn = select(dftrn,-Y)
+  ytrn = y_trn
+  xval = select(dfval,-Y)
+  yval = y_val
+  xtst = dftst
+
+  mod_trn = glmnet(as.matrix(xtrn),
+                   ytrn,
+                   alpha  = trn_alpha,
+                   lambda = trn_lambda,
+                   family = 'binomial'
+                   )
+  yhat_trn_trn_prob = predict(mod_trn,
+                         newx=as.matrix(xtrn),
+                         s=trn_lambda,
+                         type='response')
+  yhat_trn_val_prob = predict(mod_trn,
+                         newx=as.matrix(xval),
+                         s=trn_lambda,
+                         type='response')
+  yhat_trn_tst_prob = predict(mod_trn,
+                         newx=as.matrix(xtst),
+                         s=trn_lambda,
+                         type='response')
+  
+  mod_val = glmnet(as.matrix(xval),
+                   yval,
+                   alpha  = val_alpha,
+                   lambda = val_lambda,
+                   family = 'binomial'
+                   )
+  yhat_val_trn_prob = predict(mod_val,
+                         newx=as.matrix(xtrn),
+                         s=val_lambda,
+                         type='response')
+  yhat_val_val_prob = predict(mod_val,
+                         newx=as.matrix(xval),
+                         s=val_lambda,
+                         type='response')
+  yhat_val_tst_prob = predict(mod_val,
+                         newx=as.matrix(xtst),
+                         s=val_lambda,
+                         type='response')
+        
+  yhat_trn_trn = ifelse(yhat_trn_trn_prob < 0.5, 'not fraud', 'fraud')
+  yhat_trn_val = ifelse(yhat_trn_val_prob < 0.5, 'not fraud', 'fraud')
+  yhat_trn_tst = ifelse(yhat_trn_tst_prob < 0.5, 'not fraud', 'fraud')
+  yhat_val_trn = ifelse(yhat_val_trn_prob < 0.5, 'not fraud', 'fraud')
+  yhat_val_val = ifelse(yhat_val_val_prob < 0.5, 'not fraud', 'fraud')
+  yhat_val_tst = ifelse(yhat_val_tst_prob < 0.5, 'not fraud', 'fraud')
+
+  list('1'=1
+      ,'mod_trn'=mod_trn
+      ,'mod_val'=mod_val
+      ,'yhat_trn_trn_prob'=yhat_trn_trn_prob
+      ,'yhat_trn_val_prob'=yhat_trn_val_prob
+      ,'yhat_trn_tst_prob'=yhat_trn_tst_prob
+      ,'yhat_val_trn_prob'=yhat_val_trn_prob
+      ,'yhat_val_val_prob'=yhat_val_val_prob
+      ,'yhat_val_tst_prob'=yhat_val_tst_prob      
+      ,'yhat_trn_trn'=yhat_trn_trn
+      ,'yhat_trn_val'=yhat_trn_val
+      ,'yhat_trn_tst'=yhat_trn_tst
+      ,'yhat_val_trn'=yhat_val_trn
+      ,'yhat_val_val'=yhat_val_val
+      ,'yhat_val_tst'=yhat_val_tst
+      )
+}
+```
+
+```{r evaluate models, echo=F, cache=T}
+#mod_len_tune = model_len_tune(df_trn_miss$m3,df_val_miss$m3)
+# mod_len_pred = model_len_pred(df_trn_miss$m3,df_val_miss$m3,df_tst_miss$m3,mod_len_tune$trn_alpha,mod_len_tune$trn_lambda,mod_len_tune$val_alpha,mod_len_tune$val_lambda)
+
+# ytrn_final = factor(Ytrain)
+# yval_final = factor(Yvalidate)
+# trn_trn = factor(mod_len_pred$yhat_trn_trn)
+# trn_val = factor(mod_len_pred$yhat_trn_val)
+# trn_tst = factor(mod_len_pred$yhat_trn_tst)
+# val_trn = factor(mod_len_pred$yhat_val_trn)
+# val_val = factor(mod_len_pred$yhat_val_val)
+# val_tst = factor(mod_len_pred$yhat_val_tst)
+
+cm_trn_trn = confusionMatrix(reference=trn_trn,data=ytrn_final)
+cm_trn_val = confusionMatrix(reference=trn_val,data=yval_final)
+cm_val_trn = confusionMatrix(reference=val_trn,data=ytrn_final)
+cm_val_val = confusionMatrix(reference=val_val,data=yval_final)
+
+# cm03 = confusionMatrix(reference=trn_val,data=val_tst)
+# cm04 = confusionMatrix(reference=trn_tst,data=trn_val)
+# cm05 = confusionMatrix(reference=trn_tst,data=val_val)
+# cm08 = confusionMatrix(reference=val_val,data=trn_tst)
+# cm09 = confusionMatrix(reference=val_val,data=val_tst)
+# cm10 = confusionMatrix(reference=val_tst,data=trn_val)
+# cm12 = confusionMatrix(reference=val_tst,data=val_val)
+
+cm_trn_trn$table;data.frame(cm_trn_trn$byClass);data.frame(cm_trn_trn$overall)
+cm_trn_val$table;data.frame(cm_trn_val$byClass);data.frame(cm_trn_val$overall)
+cm_val_trn$table;data.frame(cm_val_trn$byClass);data.frame(cm_val_trn$overall)
+cm_val_val$table;data.frame(cm_val_val$byClass);data.frame(cm_val_val$overall)
+
+
+# sink(paste(file_path,'stat656_final_pred.txt',sep=''), append=FALSE, split=FALSE)
+# mod_len_pred
+# sink()
+
+```
+
+```{r get predictions, echo=F, cache=T}
+### get preds:
+Yhat = data.frame('Yhat' = mod_len_pred$yhat_val_tst)
+#write.table
+if(yourName == 'firstLast'){
+  print('fill in your name!')
+}else{
+  fName = paste(c(yourName,'_Predictions.txt'),collapse='')
+  write.table(Yhat,file=fName,row.names=FALSE,col.names=FALSE)  
+}
+```

@@ -1,0 +1,423 @@
+Analysis
+
+The analysis is divided into the following steps:
+
+- Loading the data and examining the data structure
+  * Dataset dimensions
+  * Classes and data types of features
+  * Number of missing values in each feature
+  * Checking for multicollinearity
+- Handling missing data
+  * List-wise deletion
+  * K nearest neighbors
+  * Mode imputation
+- Modeling the data
+  * Simple linear regression (good for understanding the data and giving some baseline statistics)
+    i Looking at the most important features based on significance
+    ii Getting a basic set of predictions
+  * Multiple linear regression with k-fold cross validation
+  * Elastic net regression with k-fold cross validation
+  
+With respect to my R code, the goal was to make it as modular as possible so that it would be easier for me to work with, easier to read, and easy to reuse either completely or for individual functions. To do this, I created functions and subfunctions for most of my steps and put each in its own chunk of code.
+  
+Step 1: Loading and examining the data
+- The Xtrain and Xtest data each contained 254 numeric features and 1 factor.
+- Xtrain had 1328 missing values, Xtest had 250 missing values.
+- The missing values were seemingly randomly distributed and there were no more than 12 per feature in the training data and 5 per feature in test set.
+- There was no obvious multicollinearity between features.
+- The Ytrain data was normally distributed, checked with a qqplot and Shapiro-Wilk
+
+Step 2: Handling missing data
+- List-wise deletion deleted over 1000 rows from the training data and so was not sufficient.
+- A k nearest neighbors algorithm was used to impute the missing values in both the training and test numeric features. K nearest neighbors was used because it is simple and quick, and because a more sophisticated method was likely unnecessary given the low number of missing values by feature.
+- Since k nearest neighbors cannot be used with categorical data, simple mode imputation was used for the single categorical feature X255 in both training and test datasets.
+- Two dummy columns were created to replace the 3-category X255 column so that the data could be modeled appropriately.
+
+Step 3: Modeling the data
+- Simple linear regression was used first in order to get a sense of variable importance and to see a quick summary of the linear fit. Most of the features were not significant. The most significant were:
+"X229"	2.05466240765539e-05
+"X16"	0.000300306340105525
+"X95"	0.00059094021553691
+"X158"	0.00161580603208504
+"X11"	0.00264856928639357
+"X198"	0.00283758526423727
+"X255_c"	0.00450125217404445
+
+- Multiple linear regression with k-fold cross validation was then used with a k value of 10. The training error for this model was 0.9257804.
+
+- The final model used was elastic net regression. This model combines both lasso and ridge regression and thus is quite effective by both selecting variables and shrink coefficients.
+- The best tuning parameters found after trying 100 values between 0.5 and 1 for alpha and 100 values between .0001 and .5 for lambda were alpha = 0.8383838 lambda = 0.02534747
+- The training error of this model was 0.9739983
+- While the multiple linear regression model actually had a lower training error, the difference is small, and the more advanced characteristics of elastic net regression mean that it has a stronger chance of being a better fit on the test data. Multiple linear regression may also be overfitting the training data.
+
+
+
+
+Appendix A: R Code
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(cache = TRUE)
+```
+
+```{r load data and packages, cache = TRUE}
+yourName = 'michaelHinshaw'#fill in your name, no spaces, leave quotes
+#load data                                                              
+path='B:\\education\\tamu\\'
+load(paste(path,'ytrain.Rdata',sep=''))
+load(paste(path,'xtrain.Rdata',sep=''))
+load(paste(path,'xtest.Rdata',sep=''))
+
+options(max.print=1000000)
+
+#load packages
+load_pkgs <- function(pkg_list) {
+  for (pkg in pkg_list) {
+    print(pkg)
+    if(!require(pkg,quiet=T,character.only=T))install.packages(pkg);require(pkg,character.only=T)
+  }
+}
+pkg_list = c('tidyverse',
+             'dplyr',
+             'ggplot2',
+             'car',
+             'AppliedPredictiveModeling',
+             'caret',
+             'RANN',
+             'corrplot',
+             'fastDummies',
+             'earth',
+             'vip',
+             'glmnet',
+             'lattice',
+             'pROC',
+             'neuralnet',
+             'missForest',
+             'e1071',
+             'readr'
+             )
+load_pkgs(pkg_list)
+
+#rename datasets for convenience
+x_trn = Xtrain
+x_tst = Xtest
+y_trn = Ytrain
+x_trn_mx = as.matrix(x_trn)
+x_tst_mx = as.matrix(x_tst)
+
+#create full train data frame
+df_trn = cbind.data.frame(x_trn,y_trn)
+names(df_trn)[ncol(x_trn) + 1] = "Y"
+
+set.seed(1)
+```
+
+```{r examine datasets initial, cache = TRUE}
+sink(paste(path,'data_info.txt',sep=''), append=FALSE, split=FALSE)
+examine_dataset <- function(dataset) {
+  #gives summary information about a given dataset
+  cat("\n--------",deparse(substitute(dataset)),"dataset information--------\n")
+  cat(" \nDataset structure:\n")
+  str(dataset, list.len=ncol(dataset))
+  if (is.data.frame(dataset)) {
+    cat("\nData frame rows:", nrow(dataset),"\n")
+    cat("\nData frame columns:", ncol(dataset),"\n")
+    cat("\nFeature classes:")
+    print(table(sapply(dataset, class)))
+    cat("\nData types:")
+    print(table(sapply(dataset, typeof)))
+    cat("\nFactors:",names(which(sapply(dataset,is.factor))),"\n")
+    cat("\nCheck for NA values:")
+    print(table(sapply(dataset,is.na)))
+    print(stack(sapply(dataset, function(y) sum(length(which(is.na(y)))))))
+    print(stack(sapply(dataset, function(y) sum(length(which(is.na(y)))))/nrow(dataset)))
+    max(sapply(dataset, function(y) sum(length(which(is.na(y))))))
+  } else {
+    cat("\nData type:",unique(sapply(dataset, typeof)),"\n")
+    cat("\nNA values:",sum(is.na(dataset)),"\n")
+    cat("\nNA %:",sum(is.na(dataset))/length(dataset),"\n")
+  }
+}
+
+examine_dataset(x_trn)
+examine_dataset(x_tst)
+examine_dataset(y_trn)
+sink()
+
+jpeg(file=paste(path,'data_y_trn_hist.jpeg',sep=''))
+hist = hist(y_trn)
+dev.off()
+```
+
+```{r handle missing data, cache = TRUE}
+#notes:
+  #no features missing large amounts of data.
+  #largest number of missing values in a single feature is 12 in the training data and 5 in the test data.
+
+modeImpute = function(Xqual){
+  tbl   = table(Xqual)
+  Xqual[is.na(Xqual)] = names(tbl)[which.max(tbl)]
+  return(Xqual)
+}
+  
+handle_missing <- function(df,y_col = NULL) {
+  #takes full dataset and creates multiple datasets with different missing value techniques
+  #split data by class
+  if(!is.null(y_col)) {
+    x = select(df,-y_col)
+    y = select(df,y_col)
+    } else {
+    x = df}
+  x_num = data.frame(x[,sapply(x,is.numeric)])
+  x_fac = data.frame(x[,sapply(x,is.factor)])
+  #reset column names because they are lost if df has <2 cols
+  colnames(x_num) = names(which(sapply(select(df,-y_col),is.numeric)))
+  colnames(x_fac) = names(which(sapply(select(df,-y_col),is.factor)))
+
+  #method 1: simple list-wise deletion, remove all obs with missing values
+  #using as a baseline
+  m1 = na.omit(df)
+  m1 = dummy_cols(m1,
+                  select_columns=names(x_fac),
+                  remove_first_dummy=T,
+                  remove_selected_columns=T)
+  #method 2: knn
+  x_num_imp = predict(preProcess(select(df,-colnames(x_fac)),method='knnImpute'),newdata=select(df,-colnames(x_fac)))
+  x_fac_imp = modeImpute(x_fac)
+  m2 = data.frame(cbind(x_num_imp,x_fac_imp))
+  m2 = dummy_cols(m2
+                 ,select_columns=names(x_fac)
+                 ,remove_first_dummy=T
+                 ,remove_selected_columns=T
+                )
+  
+  #check if imputation successful
+  #print(anyNA(df_imp))
+  #print(dim(df_imp))
+
+  list('m1' = m1
+      ,'m2' = m2
+      ,'y_col' = y_col
+      )
+}
+
+df_trn_miss = handle_missing(df_trn,"Y")
+df_tst_miss = handle_missing(x_tst)
+```
+
+```{r model: simple linear regression, cache = TRUE}
+model_lr <- function(df_train,y_col = NULL,df_test) {
+  #model 1: linear regression
+  df_name = deparse(substitute(df_train))
+  method = 'lr'
+  sink(paste(path,'summ_',df_name,'_',method,'.txt',sep=''), append=FALSE, split=FALSE)
+  
+  
+  mod = lm(Y ~., data=df_train)
+  y = select(df_train,y_col)
+  print(summary(mod))
+  pv = summary(mod)$coef[,4] #p-values from summary
+  sig_val = sort(pv[pv < 0.05]) #significant features ordered most to least
+  vif = sort(car::vif(mod),decreasing=T)
+  yhat_trn = predict(mod,df_train)
+  res = y - yhat_trn
+  app_err = mean(res**2) #MSE
+  cv_loss = mean(mod$resample$RMSE**2)
+  yhat_tst = predict(mod,df_test)
+  
+  cat("\nApparent Error / Training Error / MSE:", app_err,"\n")
+  cat("\nCV loss:", cv_loss,"\n")
+  write.table(yhat_trn,
+            file=paste(path,'yhat_trn_',df_name,'_',method,'.txt',sep=''),
+            sep="\t",
+            row.names=F,
+            col.names=F)
+  write.table(yhat_tst,
+            file=paste(path,'yhat_tst_',df_name,'_',method,'.txt',sep=''),
+            sep="\t",
+            row.names=F,
+            col.names=F)
+  jpeg(file=paste(path,'yhat_trn_hist_',df_name,'_',method,'.jpeg',sep=''))
+  hist = hist(yhat_trn)
+  dev.off()
+  jpeg(file=paste(path,'yhat_tst_hist_',df_name,'_',method,'.jpeg',sep=''))
+  hist = hist(yhat_tst)
+  dev.off()
+  sink()
+  
+  list('yhat_trn' = yhat_trn
+      ,'yhat_tst' = yhat_tst
+      ,'app_err' = app_err
+      ,'cv_loss' = cv_loss
+      )
+}
+```
+
+```{r model: multiple regression, cache = TRUE}
+model_mr <- function(df_train,y_col=NULL,df_test) {
+  #model 2: multiple regression with CV
+  df_name = deparse(substitute(df_train))
+  method = 'mr'
+  sink(paste(path,'summ_',df_name,'_',method,'.txt',sep=''), append=FALSE, split=FALSE)
+  
+  if(!is.null(y_col)) {
+    x = select(df_train,-y_col)
+    y = unlist(select(df_train,y_col))
+    } else {
+    x = df_train}
+
+  tc = trainControl(method = 'cv', number = 10)
+  mod = train(x,
+              y,
+              method="lm",
+              trControl = tc)
+  print(summary(mod))
+  yhat_trn = predict(mod,df_train)
+  res = y - yhat_trn
+  app_err = mean(res**2) #MSE
+  cv_loss = mean(mod$resample$RMSE**2)
+  yhat_tst = predict(mod,df_test)
+  
+  cat("\nApparent Error / Training Error / MSE:", app_err,"\n")
+  cat("\nCV loss:", cv_loss,"\n")
+  write.table(yhat_trn,
+            file=paste(path,'yhat_trn_',df_name,'_',method,'.txt',sep=''),
+            sep="\t",
+            row.names=F,
+            col.names=F)
+  write.table(yhat_tst,
+            file=paste(path,'yhat_tst_',df_name,'_',method,'.txt',sep=''),
+            sep="\t",
+            row.names=F,
+            col.names=F)
+  jpeg(file=paste(path,'yhat_trn_hist_',df_name,'_',method,'.jpeg',sep=''))
+  hist = hist(yhat_trn)
+  dev.off()
+  jpeg(file=paste(path,'yhat_tst_hist_',df_name,'_',method,'.jpeg',sep=''))
+  hist = hist(yhat_tst)
+  dev.off()
+  sink()
+  
+  list('yhat_trn' = yhat_trn
+      ,'yhat_tst' = yhat_tst
+      ,'app_err' = app_err
+      ,'cv_loss' = cv_loss
+      )
+}
+```
+
+```{r model: elastic net tuning, cache = TRUE}
+model_en_tune <- function(df_train,y_col = NULL,df_test) {
+  #model 3: elastic net with CV
+  df_name = deparse(substitute(df_train))
+  method = 'ent'
+  sink(paste(path,'summ_',df_name,'_',method,'.txt',sep=''), append=FALSE, split=FALSE)
+  
+  if(!is.null(y_col)) {
+    x = select(df_train,-y_col)
+    y = unlist(select(df_train,y_col))
+    } else {
+    x = df_train}
+  k = 10
+  tc = trainControl(method = "cv", number = k)
+  tune_grid = expand.grid('alpha'=seq(0.5, 1, length.out = 100),
+                          'lambda' = seq(0.0001, .5, length.out = 100))
+  tune_params = train(x,
+                      y,
+                      method = "glmnet", 
+                      trControl = tc,
+                      tuneGrid = tune_grid)
+  print(tune_params)
+  sink()
+  
+  list('alpha' = tune_params$bestTune$alpha
+      ,'lambda' = tune_params$bestTune$lambda
+      )
+}
+```
+
+```{r model: elastic net predictions, cache = TRUE}
+model_en_pred <- function(df_train,y_col=NULL,df_test,alpha,lambda,type) {
+  #model 3: elastic net with CV
+  df_name = deparse(substitute(df_train))
+  method = 'enp'
+  sink(paste(path,'summ_',df_name,'_',method,'_',type,'.txt',sep=''), append=FALSE, split=FALSE)
+  
+  if(!is.null(y_col)) {
+    x = as.matrix(select(df_train,-y_col))
+    y = as.matrix(unlist(select(df_train,y_col)))
+    } else {
+    x = df_train}
+  
+  mod = glmnet(x,
+               y,
+               alpha = alpha,
+               lambda=lambda)
+  print(summary(mod))
+  yhat_trn = predict(mod,newx=x,s=lambda,type=type)
+  yhat_tst = predict(mod,newx=as.matrix(df_test),s=lambda,type=type)
+  if (length(y) == length(yhat_trn)){
+    res = y - yhat_trn
+    app_err = mean(res**2) #MSE
+    cat("\nApparent Error / Training Error / MSE:", app_err,"\n")
+  }
+
+  write.table(yhat_trn,
+            file=paste(path,'yhat_trn_',df_name,'_',method,'.txt',sep=''),
+            sep="\t",
+            row.names=F,
+            col.names=F)
+  write.table(yhat_tst,
+            file=paste(path,'yhat_tst_',df_name,'_',method,'.txt',sep=''),
+            sep="\t",
+            row.names=F,
+            col.names=F)
+  jpeg(file=paste(path,'yhat_trn_hist_',df_name,'_',method,'.jpeg',sep=''))
+  hist = hist(yhat_trn)
+  dev.off()
+  jpeg(file=paste(path,'yhat_tst_hist_',df_name,'_',method,'.jpeg',sep=''))
+  hist = hist(yhat_tst)
+  dev.off()
+  sink()
+
+  list('yhat_trn' = yhat_trn
+      ,'yhat_tst' = yhat_tst
+      ,'app_err' = app_err
+      )
+}
+```
+
+```{r create models, cache = TRUE}
+sink()
+# m_lr1 = model_lr(df_trn_miss$m1,df_trn_miss$y_col,df_tst_miss$m1)
+# m_lr2 = model_lr(df_trn_miss$m2,df_trn_miss$y_col,df_tst_miss$m2)
+# 
+# m_mr1 = model_mr(df_trn_miss$m1,df_trn_miss$y_col,df_tst_miss$m1)
+# m_mr2 = model_mr(df_trn_miss$m2,df_trn_miss$y_col,df_tst_miss$m2)
+
+#m_ent1 = model_en_tune(df_trn_miss$m1,df_trn_miss$y_col,df_tst_miss$m1)
+#m_ent2 = model_en_tune(df_trn_miss$m2,df_trn_miss$y_col,df_tst_miss$m2)
+
+m_enp11 = model_en_pred(df_trn_miss$m1,df_trn_miss$y_col,df_tst_miss$m1,1,0.5,'link')
+m_enp12 = model_en_pred(df_trn_miss$m1,df_trn_miss$y_col,df_tst_miss$m1,1,0.5,'response')
+m_enp13 = model_en_pred(df_trn_miss$m1,df_trn_miss$y_col,df_tst_miss$m1,1,0.5,'class')
+
+m_enp21 = model_en_pred(df_trn_miss$m2,df_trn_miss$y_col,df_tst_miss$m2,0.8383838,0.02534747,'link')
+m_enp22 = model_en_pred(df_trn_miss$m2,df_trn_miss$y_col,df_tst_miss$m2,0.8383838,0.02534747,'response')
+m_enp23 = model_en_pred(df_trn_miss$m2,df_trn_miss$y_col,df_tst_miss$m2,0.8383838,0.02534747,'class')
+
+```
+
+```{r output predictions}
+### get preds:
+Yhat = data.frame('Yhat' = m_enp21$yhat_tst)
+#write.table
+if(yourName != 'michaelHinshaw'){
+  print('fix name')
+}else{
+  fName = paste(c(path,yourName,'Predictions.txt'),collapse='')
+  write.table(Yhat,file=fName,row.names=FALSE,col.names=FALSE)  
+}
+```
+
+
+

@@ -1,0 +1,29 @@
+original
+--------
+For this assignment, I want you to make some predictions given some training and test data.
+Follow the format in the attached sample code 'codeStudents.r' for saving your predictions.
+Do not deviate from this format for your submission!
+Only submit test predictions
+  
+Predictions [35 points]
+ I'll make predictions of my own (using a basic, quick approach) and get the squared error loss on some test data = R_D. 
+ You'll submit your predictions, which will be scored on the withheld test supervisors, producing a test error R.
+ Your grade on this part will be determined byThis 
+  gradePredRaw = (R_D/R) * 100 
+  gradePred = min(gradePredRaw,120)
+Write-up [65 points]
+ A brief writeup (no more than 500 words) describing the techniques you used to generate the predictions.
+ Be very specific about what you did. Example: don’t just say “I used Elastic net regression”
+ Say what features you used (even if it is all of them) and how you chose tuning parameter(s).
+ Some details you should include are:
+  important features you found and how you judged importance
+  how you estimated the test error
+  any visualizations you made about the data
+
+You can use whatever document preparation system you like (including R markdown), but it must be submitted in .pdf
+Your write-up needn’t look like an “essay”. 
+You can and should use lists to summarize what you did, for instance
+ Include your code as an appendix if you do not use R Markdown (this does not count against the word limit)
+ IMPORTANT: Make your write-up very easy to read
+ Do not include ANY extraneous output as it will be penalized
+Save your write-up in camel-case as firstNameLastName.pdf

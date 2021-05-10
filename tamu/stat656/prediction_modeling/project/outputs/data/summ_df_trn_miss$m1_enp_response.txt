@@ -1,0 +1,15 @@
+          Length Class     Mode   
+a0          1    -none-    numeric
+beta      256    dgCMatrix S4     
+df          1    -none-    numeric
+dim         2    -none-    numeric
+lambda      1    -none-    numeric
+dev.ratio   1    -none-    numeric
+nulldev     1    -none-    numeric
+npasses     1    -none-    numeric
+jerr        1    -none-    numeric
+offset      1    -none-    logical
+call        5    -none-    call   
+nobs        1    -none-    numeric
+
+Apparent Error / Training Error / MSE: 590.4203 
